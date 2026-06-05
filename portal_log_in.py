@@ -2,19 +2,16 @@ from selenium import webdriver
 from selenium.webdriver.common.by import By
 import time
 from PIL import Image
-from selenium.webdriver.edge.options import Options
+from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import NoAlertPresentException
-from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import NoAlertPresentException, TimeoutException
+from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 import re
 import os
-from selenium.webdriver.support.ui import Select
 import sys
 import shutil
 import pytesseract
-
 
 
 def log_in(person, password, system=0,show=0,headless=0):
@@ -40,7 +37,7 @@ def log_in(person, password, system=0,show=0,headless=0):
     
 
 
-    # 建立 EdgeOptions 物件
+    # 建立 Chrome Options 物件
     options = Options()
     # 設定 User-Agent
     user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/90.0.4430.93 Safari/537.36"
@@ -50,8 +47,7 @@ def log_in(person, password, system=0,show=0,headless=0):
         options.add_argument("--window-size=1920,1080")  #無頭模式沒有全螢幕  請注意截圖有偏差 為了辨識驗證碼 需更改截圖範圍   
 
     # 啟動 Edge 並應用自定義的 User-Agent
-    driver = webdriver.Edge(options=options)
-    #driver = webdriver.Edge()
+    driver = webdriver.Chrome(options=options)
     driver.maximize_window()
     driver.get("https://portal.ntuh.gov.tw/")
 
