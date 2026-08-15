@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ntuh-portal-log-in"
+version = "0.1.0"
+description = "NTUH Portal Selenium login with an embedded CAPTCHA OCR model"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "selenium",
+]
+
+[tool.setuptools]
+py-modules = ["portal_log_in"]

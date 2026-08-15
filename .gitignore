@@ -1,0 +1,23 @@
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local credentials and environment settings
+config.json
+.env
+
+# Runtime CAPTCHA images
+captcha.png
+captcha_converted.png
+
+# Local data; review manually before publishing
+ntuhdermatology.xlsx
+
+# NTUH Portal Helper generated secrets and build output
+portal_helper/**/vault*.dat*
+portal_helper/dist/
+portal_helper/build/
