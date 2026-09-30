@@ -16,7 +16,11 @@ from typing import TypeAlias
 import cv2
 import numpy as np
 from selenium import webdriver
-from selenium.common.exceptions import NoAlertPresentException, TimeoutException
+from selenium.common.exceptions import (
+    NoAlertPresentException,
+    TimeoutException,
+    UnexpectedAlertPresentException,
+)
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -2744,6 +2748,75 @@ def captcha_ocr(image: ImageInput) -> str:
     return "".join(classes[result.reshape(-1).astype(int)].tolist()).upper()
 
 
+class PortalLoginError(RuntimeError):
+    """Portal rejected the login or did not return a recognizable result."""
+
+
+class PortalCredentialError(PortalLoginError):
+    """Portal explicitly reported an account/password error."""
+
+
+def _read_login_failure_message(driver, fallback_message="") -> str:
+    """Consume a login alert and read Portal's matching inline message."""
+    messages = []
+    fallback_message = str(fallback_message or "").strip()
+    if fallback_message:
+        messages.append(fallback_message)
+
+    try:
+        alert = driver.switch_to.alert
+        alert_message = (alert.text or "").strip()
+        alert.accept()
+        if alert_message:
+            messages.append(alert_message)
+    except NoAlertPresentException:
+        pass
+
+    for element in driver.find_elements(By.ID, "lblMessage"):
+        inline_message = (element.text or "").strip()
+        if inline_message:
+            messages.append(inline_message)
+
+    # Selenium may provide the same text in the alert exception and lblMessage.
+    return "\n".join(dict.fromkeys(messages))
+
+
+def _classify_login_failure(message: str) -> str:
+    """Classify only explicit Portal messages; never guess CAPTCHA failure."""
+    compact_message = re.sub(r"\s+", "", message or "")
+    credential_markers = (
+        "帳號密碼錯誤",
+        "帳號或密碼",
+        "帳號/密碼",
+        "帳號與密碼",
+        "密碼錯誤",
+    )
+    if any(marker in compact_message for marker in credential_markers):
+        return "credentials"
+    if "驗證碼" in compact_message:
+        return "captcha"
+    return "unknown"
+
+
+def _close_failed_login_driver(driver) -> None:
+    """Do not leave an unreachable Chrome process behind after a fatal login error."""
+    try:
+        driver.quit()
+    except Exception:
+        pass
+
+
+def _visible_element_or_false(locator):
+    """Return a safe wait predicate even if Selenium yields a null element."""
+    def _predicate(driver):
+        for element in driver.find_elements(*locator):
+            if element is not None and element.is_displayed():
+                return element
+        return False
+
+    return _predicate
+
+
 def log_in(person, password, system=0,show=0,headless=0):
 
     if (system != 0) and (system != 1) and (system != 2) and (system != 3):
@@ -2771,8 +2844,8 @@ def log_in(person, password, system=0,show=0,headless=0):
     driver.get("https://portal.ntuh.gov.tw/")
 
 
-    attempt=0
-    while (attempt<10):
+    maximum_attempts = 10
+    for attempt in range(1, maximum_attempts + 1):
         element = WebDriverWait(driver, 10).until(EC.visibility_of_element_located((By.ID, "txtUserID")))
         driver.find_element(By.ID, 'txtUserID').clear()
         driver.find_element(By.ID, 'txtUserID').send_keys(person)
@@ -2815,26 +2888,49 @@ def log_in(person, password, system=0,show=0,headless=0):
         try:
         # 看想要登入什麼系統
             if system ==0:
-                WebDriverWait(driver, 2).until(EC.visibility_of_element_located((By.ID, "btnRefresh_All")))#一般         
+                WebDriverWait(driver, 2).until(_visible_element_or_false((By.ID, "btnRefresh_All")))#一般
             elif system ==1:
-                WebDriverWait(driver, 2).until(EC.visibility_of_element_located((By.ID, "NTUHWeb1_ShowHideCalender")))#門診系統
+                WebDriverWait(driver, 2).until(_visible_element_or_false((By.ID, "NTUHWeb1_ShowHideCalender")))#門診系統
             elif system ==2:
-                WebDriverWait(driver, 2).until(EC.visibility_of_element_located((By.ID, "NTUHWeb1_QueryInPatientPersonAccountControl1_EmpNoCareQueryButton")))#住院系統
+                WebDriverWait(driver, 2).until(_visible_element_or_false((By.ID, "NTUHWeb1_QueryInPatientPersonAccountControl1_EmpNoCareQueryButton")))#住院系統
             else: #system ==3
-                WebDriverWait(driver, 2).until(EC.visibility_of_element_located((By.ID, "ctl00_EmerSimplePatientList1_txtChartNo"))) #急診系統
+                WebDriverWait(driver, 2).until(_visible_element_or_false((By.ID, "ctl00_EmerSimplePatientList1_txtChartNo"))) #急診系統
             
             if show==1:
                 print ("登入成功")
             os.remove('captcha.png')
             break
-        except:
-            if show==1:
-                print("辨認錯誤")
-            if attempt<10:
-                attempt=attempt+1
+        except (TimeoutException, UnexpectedAlertPresentException) as exc:
+            message = _read_login_failure_message(
+                driver,
+                getattr(exc, "alert_text", ""),
+            )
+            failure_kind = _classify_login_failure(message)
+
+            if failure_kind == "credentials":
+                _close_failed_login_driver(driver)
+                raise PortalCredentialError(f"Portal 登入失敗：{message}") from exc
+
+            if failure_kind == "captcha":
+                if show==1:
+                    print(
+                        f"驗證碼錯誤，重新辨識 "
+                        f"({attempt}/{maximum_attempts})"
+                    )
+                if attempt == maximum_attempts:
+                    _close_failed_login_driver(driver)
+                    raise PortalLoginError(
+                        f"驗證碼連續辨識失敗 {maximum_attempts} 次：{message}"
+                    ) from exc
                 continue
-            else:
-                raise RuntimeError ("repeat attempt > 9, fail logged in")
+
+            detail = message or "Portal 未提供可辨識的錯誤訊息"
+            _close_failed_login_driver(driver)
+            raise PortalLoginError(
+                f"Portal 登入未成功，且無法確認為驗證碼錯誤：{detail}"
+            ) from exc
+    else:
+        raise PortalLoginError("已達 Portal 登入重試上限")
 
     number_of_tabs = len(driver.window_handles)
     window_handles = driver.window_handles
@@ -2846,4 +2942,9 @@ def log_in(person, password, system=0,show=0,headless=0):
     return driver
 
 
-__all__ = ("captcha_ocr", "log_in")
+__all__ = (
+    "PortalCredentialError",
+    "PortalLoginError",
+    "captcha_ocr",
+    "log_in",
+)
